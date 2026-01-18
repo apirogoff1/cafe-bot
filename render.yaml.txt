@@ -1,0 +1,16 @@
+services:
+  - type: web
+    name: cafe-bot
+    env: python
+    region: frankfurt
+    buildCommand: "pip install -r requirements.txt"
+    startCommand: "python main.py"
+    envVars:
+      - key: BOT_TOKEN
+        sync: false
+      - key: YANDEX_CATALOG_ID
+        sync: false
+      - key: YANDEX_SERVICE_ACCOUNT_KEY
+        sync: false
+      - key: SPREADSHEET_ID
+        sync: false

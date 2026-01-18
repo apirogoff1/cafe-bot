@@ -1,0 +1,109 @@
+import os
+import json
+import logging
+from datetime import datetime
+from aiogram import Bot, Dispatcher, types
+from aiogram.filters import Command
+from aiogram.types import Message
+from aiogram import F
+import requests
+from yandexcloud._auth_fabric import get_auth_token
+
+logging.basicConfig(level=logging.INFO)
+
+BOT_TOKEN = os.getenv("BOT_TOKEN")
+YANDEX_CATALOG_ID = os.getenv("YANDEX_CATALOG_ID")
+YANDEX_SERVICE_ACCOUNT_KEY = json.loads(os.getenv("YANDEX_SERVICE_ACCOUNT_KEY"))
+SPREADSHEET_ID = os.getenv("SPREADSHEET_ID")
+
+bot = Bot(token=BOT_TOKEN)
+dp = Dispatcher()
+
+def get_iam_token():
+    return get_auth_token(YANDEX_SERVICE_ACCOUNT_KEY)
+
+def append_to_sheet(email: str):
+    try:
+        iam_token = get_iam_token()
+        url = f"https://api.docs.yandex.ru/v1/spreadsheets/{SPREADSHEET_ID}/values:append"
+        headers = {
+            "Authorization": f"Bearer {iam_token}",
+            "Content-Type": "application/json"
+        }
+        body = {
+            "range": "A1",
+            "values": [[email, datetime.now().isoformat()]]
+        }
+        response = requests.post(url, headers=headers, json=body)
+        return response.status_code == 200
+    except Exception as e:
+        logging.error(f"Ошибка записи в таблицу: {e}")
+        return False
+
+def ask_yandex_gpt(prompt: str) -> str:
+    try:
+        iam_token = get_iam_token()
+        url = "https://llm.api.cloud.yandex.net/foundationModels/v1/completion"
+        headers = {
+            "Authorization": f"Bearer {iam_token}",
+            "Content-Type": "application/json"
+        }
+        body = {
+            "modelUri": f"gpt://{YANDEX_CATALOG_ID}/yandexgpt/latest",
+            "completionOptions": {"stream": False, "temperature": 0.6, "maxTokens": 1000},
+            "messages": [{"role": "user", "text": prompt}]
+        }
+        response = requests.post(url, headers=headers, json=body)
+        if response.status_code == 200:
+            return response.json()["result"]["alternatives"][0]["message"]["text"]
+        else:
+            return "Не удалось получить ответ от нейросети."
+    except Exception as e:
+        logging.error(f"Ошибка Yandex GPT: {e}")
+        return "Сбой при генерации ответа."
+
+@dp.message(Command("start"))
+async def send_welcome(message: Message):
+    await message.answer(
+        "Привет. Я помогаю открыть уютное провинциальное кафе с домашней едой.\n\n"
+        "Напишите любой вопрос или запросите чек-лист: /checklist"
+    )
+
+@dp.message(Command("checklist"))
+async def send_checklist(message: Message):
+    checklist = (
+        "Чек-лист открытия кафе:\n"
+        "1. Выбор концепции: домашняя еда, ручная подача.\n"
+        "2. Меню: печень слайсами 1 см, королевские шампиньоны, подача на большой тёмной керамике, без тостов.\n"
+        "3. Атмосфера: винтаж, мягкий свет, ручные элементы декора.\n"
+        "4. Поставщики: локальные фермеры, сезонные продукты.\n"
+        "5. Юридика: ИП, разрешения, СЭС.\n"
+        "6. Персонал: повар с опытом домашней кухни.\n"
+        "7. Маркетинг: Instagram, местные события, дегустации.\n\n"
+        "Хотите получать подробные консультации? Оставьте email."
+    )
+    await message.answer(checklist)
+
+@dp.message(F.text.contains("@") & F.text.contains("."))
+async def handle_email(message: Message):
+    email = message.text.strip()
+    if append_to_sheet(email):
+        await message.answer("Email сохранён. Скоро отправим полезные материалы.")
+    else:
+        await message.answer("Ошибка сохранения. Попробуйте позже.")
+
+@dp.message()
+async def handle_query(message: Message):
+    user_query = message.text
+    prompt = (
+        "Вы — эксперт по открытию уютных провинциальных кафе с домашней едой. "
+        "Отвечайте чётко, по делу, без эмоций. Учитывайте предпочтения: "
+        "печень слайсами 1 см, королевские шампиньоны, подача не на тосте, "
+        "большая тёмная керамическая посуда, акцент на атмосферу и ручную подачу. "
+        f"Вопрос: {user_query}"
+    )
+    answer = ask_yandex_gpt(prompt)
+    await message.answer(answer)
+
+if __name__ == "__main__":
+    dp.run_polling(bot)
